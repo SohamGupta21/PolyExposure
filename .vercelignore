@@ -1,0 +1,36 @@
+# Ignore backend files not needed for Vercel deployment
+backend/__pycache__
+backend/*.pyc
+backend/.pytest_cache
+backend/market_labels_cache.json
+backend/test_*.py
+
+# Node modules
+node_modules
+frontend/node_modules
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+frontend/.next
+frontend/out
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+__pycache__
+*.py[cod]
+*$py.class
+

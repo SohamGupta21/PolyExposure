@@ -64,4 +64,22 @@ See [frontend/README.md](frontend/README.md) for more details.
 
 When the backend is running, you can access:
 - **Interactive API docs (Swagger UI)**: http://localhost:8000/docs
-- **Alternative API docs (ReDoc)**: http://localhost:8000/redoc 
+- **Alternative API docs (ReDoc)**: http://localhost:8000/redoc
+
+## 🚀 Deployment
+
+This project is ready to deploy to Vercel!
+
+**Quick Deploy:**
+1. Push your code to GitHub
+2. Import your repo to [Vercel](https://vercel.com)
+3. Set Root Directory to `frontend`
+4. Deploy!
+
+**📖 See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment instructions.**
+
+The project includes:
+- ✅ Vercel configuration (`vercel.json`)
+- ✅ Serverless API adapter (`api/index.py`)
+- ✅ Production-ready CORS settings
+- ✅ Full deployment guide 

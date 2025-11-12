@@ -6,7 +6,29 @@ import uvicorn
 
 app = FastAPI(title="PolyPortfolio API", description="FastAPI backend for Polymarket data API", version="1.0.0")
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# CORS configuration - Update allowed origins for production
+allowed_origins = [
+    "http://localhost:3000",  # Local development
+    "http://localhost:8000",  # Local backend
+    # Add your Vercel deployment URL here after deploying:
+    # "https://your-app-name.vercel.app",
+]
+
+# Allow all origins in development, specific origins in production
+import os
+if os.getenv("VERCEL_ENV") or os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER"):
+    # In production, you should set ALLOWED_ORIGINS env var with comma-separated URLs
+    env_origins = os.getenv("ALLOWED_ORIGINS", "")
+    if env_origins:
+        allowed_origins.extend(env_origins.split(","))
+
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=allowed_origins if allowed_origins else ["*"], 
+    allow_credentials=True, 
+    allow_methods=["*"], 
+    allow_headers=["*"]
+)
 
 polymarket_api = PolymarketAPI()
 
