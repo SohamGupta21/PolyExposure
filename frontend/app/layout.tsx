@@ -11,9 +11,9 @@ const spaceMono = Space_Mono({
 })
 
 export const metadata: Metadata = {
-  title: "Polymarket Analyzer - Track Your Positions",
+  title: "Poly Portfolio - Track Your Positions",
   description: "Analyze Polymarket positions, markets, holdings and exposure for any crypto wallet",
-    generator: 'v0.app'
+  generator: 'v0.app',
 }
 
 export default function RootLayout({

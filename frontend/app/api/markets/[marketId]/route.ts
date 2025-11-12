@@ -16,7 +16,7 @@ export async function GET(
     const response = await fetch(`${BASE_URL}/markets/${marketId}`, {
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'PolyExposure/1.0',
+        'User-Agent': 'PolyPortfolio/1.0',
       },
     })
 

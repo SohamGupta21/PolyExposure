@@ -1,32 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const BASE_URL = 'https://data-api.polymarket.com'
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000'
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
   const user = searchParams.get('user')
-  const limit = searchParams.get('limit') || '500'
-  const offset = searchParams.get('offset') || '0'
 
   if (!user) {
     return NextResponse.json({ error: 'user parameter is required' }, { status: 400 })
   }
 
   try {
-    const response = await fetch(
-      `${BASE_URL}/activity?user=${user}&limit=${limit}&offset=${offset}`,
-      {
-        headers: {
-          'Accept': 'application/json',
-          'User-Agent': 'PolyPortfolio/1.0',
-        },
-      }
-    )
+    const response = await fetch(`${BACKEND_URL}/api/pnl?user=${user}`, {
+      headers: {
+        'Accept': 'application/json',
+      },
+    })
 
     if (!response.ok) {
-      const errorText = await response.text()
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
       return NextResponse.json(
-        { error: `API error: ${response.status}`, details: errorText },
+        { error: errorData.error || `API error: ${response.status}`, details: errorData.details },
         { status: response.status }
       )
     }
@@ -36,7 +30,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     return NextResponse.json(
       {
-        error: 'Failed to fetch activity',
+        error: 'Failed to fetch PNL data from backend',
         details: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 500 }

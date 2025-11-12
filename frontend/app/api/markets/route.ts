@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
     const response = await fetch(url, {
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'PolyExposure/1.0',
+        'User-Agent': 'PolyPortfolio/1.0',
       },
     })
 

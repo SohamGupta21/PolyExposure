@@ -64,3 +64,15 @@ export interface ExpirationTimelineItem {
   daysFromNow: number
 }
 
+export interface PnLDataPoint {
+  date: string  // Month identifier (e.g., "2024-01")
+  pnl: number   // Total PNL for that month
+  cumulativePnL: number  // Running total PNL
+}
+
+export interface PnLResponse {
+  user: string
+  data: PnLDataPoint[]
+  totalPnL: number  // Current total PNL
+}
+

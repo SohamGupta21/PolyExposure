@@ -1,6 +1,6 @@
-# PolyExposure Backend
+# PolyPortfolio Backend
 
-FastAPI backend for the PolyExposure application, providing REST API endpoints for interacting with the Polymarket Data API.
+FastAPI backend for the PolyPortfolio application, providing REST API endpoints for interacting with the Polymarket Data API.
 
 ## Installation
 

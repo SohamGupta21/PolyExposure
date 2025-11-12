@@ -1,24 +1,30 @@
 "use client"
 
 import { useState } from "react"
-import { Search, TrendingUp, TrendingDown, Activity, DollarSign, Zap, Calendar, Target } from "lucide-react"
+import { Search, TrendingUp, TrendingDown, Activity, DollarSign, Zap, Calendar } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Line, LineChart, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Pie, PieChart, Cell } from "recharts"
+import { Pie, PieChart, Cell, ResponsiveContainer } from "recharts"
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
 import type { Position, ActivityLogItem, ExpirationTimelineItem } from "@/lib/types"
-import { transformPositions, transformActivity, transformExpirationTimeline, calculatePnLHistory } from "@/lib/transformers"
+import { transformPositions, transformActivity, transformExpirationTimeline } from "@/lib/transformers"
 
-export default function PolymarketAnalyzer() {
+export default function PolyPortfolio() {
   const [walletAddress, setWalletAddress] = useState("")
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
   const [timeframe, setTimeframe] = useState<"1M" | "3M" | "6M" | "1Y">("3M")
   const [positions, setPositions] = useState<Position[]>([])
   const [activityLog, setActivityLog] = useState<ActivityLogItem[]>([])
-  const [pnlHistory, setPnLHistory] = useState<Array<{ date: string; pnl: number }>>([])
+  const [positionsValue, setPositionsValue] = useState<number | null>(null)
+  const [totalPnL, setTotalPnL] = useState<number | null>(null)
+  const [activePositionsCount, setActivePositionsCount] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [sectorExposure, setSectorExposure] = useState<Array<{ sector: string; value: number; percentage: number }>>([])
+  const [isLoadingSectors, setIsLoadingSectors] = useState(false)
+  const [unrealizedProfit, setUnrealizedProfit] = useState<number | null>(null)
+  const [unrealizedProfitROI, setUnrealizedProfitROI] = useState<number | null>(null)
 
   const handleAnalyze = async () => {
     if (!walletAddress) return
@@ -27,11 +33,35 @@ export default function PolymarketAnalyzer() {
     setError(null)
 
     try {
-      // Fetch activity and positions in parallel
-      const [activityRes, positionsRes] = await Promise.all([
+      // Fetch activity, positions, value, total PnL, and unrealized profit in parallel
+      const [activityRes, positionsRes, valueRes, totalPnLRes, unrealizedProfitRes] = await Promise.all([
         fetch(`/api/activity?user=${walletAddress}&limit=500`),
         fetch(`/api/positions?user=${walletAddress}`),
+        fetch(`/api/value?user=${walletAddress}`),
+        fetch(`/api/total-pnl?user=${walletAddress}`),
+        fetch(`/api/unrealized-profit?user=${walletAddress}`),
       ])
+
+      // Fetch sector exposure separately (may take longer due to API calls)
+      setIsLoadingSectors(true)
+      setSectorExposure([])
+      
+      // Fetch sector exposure in background
+      fetch(`/api/sector-exposure?user=${walletAddress}`)
+        .then(async (sectorRes) => {
+          if (sectorRes.ok) {
+            const sectorData = await sectorRes.json()
+            if (sectorData && sectorData.sectors && Array.isArray(sectorData.sectors)) {
+              setSectorExposure(sectorData.sectors)
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn("Failed to fetch sector exposure:", err)
+        })
+        .finally(() => {
+          setIsLoadingSectors(false)
+        })
 
       if (!activityRes.ok || !positionsRes.ok) {
         const activityError = await activityRes.json().catch(() => ({}))
@@ -41,6 +71,52 @@ export default function PolymarketAnalyzer() {
 
       const activityRaw = await activityRes.json()
       const positionsRaw = await positionsRes.json()
+      
+      // Parse value response - API returns array: [{'user': '...', 'value': ...}]
+      let valueData: number | null = null
+      if (valueRes.ok) {
+        try {
+          const valueRaw = await valueRes.json()
+          // API returns an array with one object: [{'user': '...', 'value': ...}]
+          if (Array.isArray(valueRaw) && valueRaw.length > 0) {
+            valueData = valueRaw[0].value || null
+          } else if (typeof valueRaw === 'number') {
+            valueData = valueRaw
+          } else if (valueRaw && typeof valueRaw === 'object') {
+            valueData = valueRaw.value || valueRaw.totalValue || valueRaw.positionsValue || null
+          }
+        } catch (err) {
+          console.warn("Failed to parse value response:", err)
+        }
+      }
+      
+      // Parse total PnL response
+      let totalPnLData: number | null = null
+      if (totalPnLRes.ok) {
+        try {
+          const totalPnLRaw = await totalPnLRes.json()
+          if (totalPnLRaw && typeof totalPnLRaw === 'object') {
+            totalPnLData = totalPnLRaw.totalPnL || null
+          }
+        } catch (err) {
+          console.warn("Failed to parse total PnL response:", err)
+        }
+      }
+      
+      // Parse unrealized profit response
+      let unrealizedProfitData: number | null = null
+      let unrealizedProfitROIData: number | null = null
+      if (unrealizedProfitRes.ok) {
+        try {
+          const unrealizedProfitRaw = await unrealizedProfitRes.json()
+          if (unrealizedProfitRaw && typeof unrealizedProfitRaw === 'object') {
+            unrealizedProfitData = unrealizedProfitRaw.unrealizedProfit || null
+            unrealizedProfitROIData = unrealizedProfitRaw.roi || null
+          }
+        } catch (err) {
+          console.warn("Failed to parse unrealized profit response:", err)
+        }
+      }
 
       // Check for API errors in response
       if (activityRaw.error) {
@@ -57,23 +133,33 @@ export default function PolymarketAnalyzer() {
         : activityRaw.data || activityRaw.items || activityRaw.results || []
       
       // Handle different possible response structures for positions
+      // Backend now returns { data: [...], count: N } after pagination
       let positionsData: any[] = []
+      let positionsCount: number | null = null
+      
       if (Array.isArray(positionsRaw)) {
         positionsData = positionsRaw
+        positionsCount = positionsRaw.length
       } else if (positionsRaw && typeof positionsRaw === 'object') {
-        // Try common response structures
-        positionsData = positionsRaw.data || 
-                       positionsRaw.items || 
-                       positionsRaw.results || 
-                       positionsRaw.positions ||
-                       (positionsRaw.positions && Array.isArray(positionsRaw.positions) ? positionsRaw.positions : []) ||
-                       []
+        // Backend returns { data: [...], count: N }
+        if (positionsRaw.data && Array.isArray(positionsRaw.data)) {
+          positionsData = positionsRaw.data
+          positionsCount = positionsRaw.count !== undefined ? positionsRaw.count : positionsRaw.data.length
+        } else {
+          // Try common response structures
+          positionsData = positionsRaw.items || 
+                         positionsRaw.results || 
+                         positionsRaw.positions ||
+                         []
+          positionsCount = positionsData.length
+        }
         
         // If still empty, check if the object itself contains position-like data
         if (positionsData.length === 0 && Object.keys(positionsRaw).length > 0) {
           // Check if it's a single position object
           if (positionsRaw.conditionId || positionsRaw.market || positionsRaw.shares) {
             positionsData = [positionsRaw]
+            positionsCount = 1
           }
         }
       }
@@ -95,7 +181,24 @@ export default function PolymarketAnalyzer() {
         })
       }
 
-      // Collect unique condition IDs to fetch market details
+      // Set basic state immediately so UI can render
+      setPositionsValue(valueData)
+      setTotalPnL(totalPnLData)
+      setActivePositionsCount(positionsCount)
+      setUnrealizedProfit(unrealizedProfitData)
+      setUnrealizedProfitROI(unrealizedProfitROIData)
+
+      // Transform data without market details first (for immediate display)
+      const initialTransformedPositions = transformPositions(positionsData, new Map())
+      const initialTransformedActivity = transformActivity(activityData, new Map())
+      
+      setPositions(initialTransformedPositions)
+      setActivityLog(initialTransformedActivity)
+
+      // Set analyzing to false so UI can render immediately
+      setIsAnalyzing(false)
+
+      // Collect unique condition IDs to fetch market details in background
       const conditionIds = new Set<string>()
       
       activityData.forEach((item: any) => {
@@ -138,65 +241,72 @@ export default function PolymarketAnalyzer() {
         }
       })
 
-      // Fetch market details for unique condition IDs (limit to 50 to avoid too many requests)
-      const marketsMap = new Map()
+      // Fetch market details in background (non-blocking)
       const conditionIdsArray = Array.from(conditionIds).slice(0, 50)
       
-      console.log(`Fetching market details for ${conditionIdsArray.length} conditions...`)
-      
-      // Fetch in batches to avoid overwhelming the API
-      const batchSize = 10
-      for (let i = 0; i < conditionIdsArray.length; i += batchSize) {
-        const batch = conditionIdsArray.slice(i, i + batchSize)
-        const marketPromises = batch.map(async (conditionId) => {
-          try {
-            const marketRes = await fetch(`/api/conditions/${conditionId}`)
-            if (marketRes.ok) {
-              const marketData = await marketRes.json()
-              return { id: conditionId, data: marketData }
+      if (conditionIdsArray.length > 0) {
+        console.log(`Fetching market details for ${conditionIdsArray.length} conditions in background...`)
+        
+        // Fetch in batches in background
+        const fetchMarketDetails = async () => {
+          const marketsMap = new Map()
+          const batchSize = 10
+          
+          for (let i = 0; i < conditionIdsArray.length; i += batchSize) {
+            const batch = conditionIdsArray.slice(i, i + batchSize)
+            const marketPromises = batch.map(async (conditionId) => {
+              try {
+                const marketRes = await fetch(`/api/conditions/${conditionId}`)
+                if (marketRes.ok) {
+                  const marketData = await marketRes.json()
+                  return { id: conditionId, data: marketData }
+                }
+              } catch (e) {
+                console.warn(`Failed to fetch market ${conditionId}:`, e)
+              }
+              return null
+            })
+            
+            const marketResults = await Promise.all(marketPromises)
+            marketResults.forEach((result) => {
+              if (result && result.data) {
+                marketsMap.set(result.id, result.data)
+              }
+            })
+            
+            // Small delay between batches to be respectful to the API
+            if (i + batchSize < conditionIdsArray.length) {
+              await new Promise(resolve => setTimeout(resolve, 100))
             }
-          } catch (e) {
-            console.warn(`Failed to fetch market ${conditionId}:`, e)
           }
-          return null
-        })
-        
-        const marketResults = await Promise.all(marketPromises)
-        marketResults.forEach((result) => {
-          if (result && result.data) {
-            marketsMap.set(result.id, result.data)
-          }
-        })
-        
-        // Small delay between batches to be respectful to the API
-        if (i + batchSize < conditionIdsArray.length) {
-          await new Promise(resolve => setTimeout(resolve, 100))
+          
+          console.log(`Fetched ${marketsMap.size} market details`)
+          
+          // Update positions and activity with market details once fetched
+          const transformedPositions = transformPositions(positionsData, marketsMap)
+          const transformedActivity = transformActivity(activityData, marketsMap)
+          
+          setPositions(transformedPositions)
+          setActivityLog(transformedActivity)
         }
+        
+        // Start fetching in background (don't await)
+        fetchMarketDetails().catch((err) => {
+          console.warn("Failed to fetch market details:", err)
+        })
       }
-      
-      console.log(`Fetched ${marketsMap.size} market details`)
-
-      // Transform the data
-      const transformedPositions = transformPositions(positionsData, marketsMap)
-      const transformedActivity = transformActivity(activityData, marketsMap)
-      const calculatedPnL = calculatePnLHistory(activityData)
-
-      setPositions(transformedPositions)
-      setActivityLog(transformedActivity)
-      setPnLHistory(calculatedPnL.length > 0 ? calculatedPnL : [
-        { date: "Jan", pnl: 0 },
-        { date: "Feb", pnl: 0 },
-        { date: "Mar", pnl: 0 },
-        { date: "Apr", pnl: 0 },
-        { date: "May", pnl: 0 },
-        { date: "Jun", pnl: 0 },
-      ])
     } catch (err) {
       console.error("Error fetching data:", err)
       setError(err instanceof Error ? err.message : "An unknown error occurred")
       setPositions([])
       setActivityLog([])
-      setPnLHistory([])
+      setPositionsValue(null)
+      setTotalPnL(null)
+      setActivePositionsCount(null)
+      setSectorExposure([])
+      setIsLoadingSectors(false)
+      setUnrealizedProfit(null)
+      setUnrealizedProfitROI(null)
     } finally {
       setIsAnalyzing(false)
     }
@@ -212,43 +322,48 @@ export default function PolymarketAnalyzer() {
 
   const filteredTimeline = getFilteredTimeline()
 
-  const sectorData = positions.reduce(
-    (acc, pos) => {
-      const existing = acc.find((s) => s.sector === pos.sector)
-      if (existing) {
-        existing.value += pos.value
-      } else {
-        acc.push({ sector: pos.sector, value: pos.value })
-      }
-      return acc
-    },
-    [] as { sector: string; value: number }[],
-  )
+  // Use sector exposure from API if available, otherwise fall back to calculating from positions
+  // Only use fallback when NOT loading and sector exposure is empty
+  const sectorData = isLoadingSectors
+    ? [] // Empty during loading to show loading state
+    : sectorExposure.length > 0 
+      ? sectorExposure.map(s => ({ sector: s.sector, value: s.value }))
+      : positions.reduce(
+          (acc, pos) => {
+            const existing = acc.find((s) => s.sector === pos.sector)
+            if (existing) {
+              existing.value += pos.value
+            } else {
+              acc.push({ sector: pos.sector, value: pos.value })
+            }
+            return acc
+          },
+          [] as { sector: string; value: number }[],
+        )
 
   const COLORS = ["hsl(142, 76%, 36%)", "hsl(180, 76%, 36%)", "hsl(270, 76%, 56%)", "hsl(330, 76%, 56%)"]
 
-  const totalValue = positions.reduce((acc, pos) => acc + pos.value, 0)
-  const totalPnL = positions.reduce((acc, pos) => acc + pos.pnl, 0)
+  // Use positions value from API if available, otherwise fall back to calculating from positions
+  const totalValue = positionsValue !== null ? positionsValue : positions.reduce((acc, pos) => acc + pos.value, 0)
+  // Use total PnL from API (Realized PnL + Current Value), otherwise fall back to calculating from positions
+  const displayTotalPnL = totalPnL !== null ? totalPnL : positions.reduce((acc, pos) => acc + pos.pnl, 0)
 
-  const expectedValue = positions.reduce((acc, pos) => acc + pos.shares * pos.currentPrice, 0)
-  const expectedReturn = totalValue > 0 ? ((expectedValue - totalValue) / totalValue) * 100 : 0
+  // Use unrealized profit from API if available
+  const displayUnrealizedProfit = unrealizedProfit !== null ? unrealizedProfit : 0
+  const displayUnrealizedProfitROI = unrealizedProfitROI !== null ? unrealizedProfitROI : 0
 
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-accent/20 bg-card/50 backdrop-blur-sm shadow-lg shadow-accent/5">
         <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center">
             <div>
               <h1 className="text-3xl sm:text-4xl font-bold text-foreground tracking-tight font-mono">
-                POLYMARKET<span className="text-accent">_ANALYZER</span>
+                POLY<span className="text-accent">_PORTFOLIO</span>
               </h1>
               <p className="text-sm text-muted-foreground mt-1 font-mono">
                 &gt; TRACK_POSITIONS // MARKETS // EXPOSURE
               </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="w-2 h-2 bg-accent rounded-full animate-pulse shadow-lg shadow-accent/50" />
-              <span className="text-xs text-accent font-mono hidden sm:inline">LIVE_FEED</span>
             </div>
           </div>
         </div>
@@ -317,7 +432,7 @@ export default function PolymarketAnalyzer() {
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-xs text-muted-foreground mb-1 font-mono uppercase tracking-wider">
-                        Total Value
+                        Positions Value
                       </p>
                       <p className="text-2xl font-bold text-foreground font-mono">${totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                     </div>
@@ -333,16 +448,16 @@ export default function PolymarketAnalyzer() {
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-xs text-muted-foreground mb-1 font-mono uppercase tracking-wider">Total P&L</p>
-                      <p className={`text-2xl font-bold font-mono ${totalPnL >= 0 ? "text-accent" : "text-red-400"}`}>
-                        {totalPnL >= 0 ? "+" : ""}${totalPnL.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      <p className={`text-2xl font-bold font-mono ${displayTotalPnL >= 0 ? "text-accent" : "text-red-400"}`}>
+                        {displayTotalPnL >= 0 ? "+" : ""}${displayTotalPnL.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </p>
                     </div>
                     <div
                       className={`w-10 h-10 rounded-lg flex items-center justify-center border shadow-inner ${
-                        totalPnL >= 0 ? "bg-accent/10 border-accent/20" : "bg-red-400/10 border-red-400/20"
+                        displayTotalPnL >= 0 ? "bg-accent/10 border-accent/20" : "bg-red-400/10 border-red-400/20"
                       }`}
                     >
-                      {totalPnL >= 0 ? (
+                      {displayTotalPnL >= 0 ? (
                         <TrendingUp className="w-5 h-5 text-accent" />
                       ) : (
                         <TrendingDown className="w-5 h-5 text-red-400" />
@@ -359,7 +474,9 @@ export default function PolymarketAnalyzer() {
                       <p className="text-xs text-muted-foreground mb-1 font-mono uppercase tracking-wider">
                         Active Positions
                       </p>
-                      <p className="text-2xl font-bold text-foreground font-mono">{positions.length.toLocaleString('en-US')}</p>
+                      <p className="text-2xl font-bold text-foreground font-mono">
+                        {(activePositionsCount !== null ? activePositionsCount : positions.length).toLocaleString('en-US')}
+                      </p>
                     </div>
                     <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center border border-accent/20 shadow-inner">
                       <Activity className="w-5 h-5 text-accent" />
@@ -373,18 +490,28 @@ export default function PolymarketAnalyzer() {
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-xs text-muted-foreground mb-1 font-mono uppercase tracking-wider">
-                        Portfolio EV
+                        Unrealized Profit
                       </p>
-                      <p className="text-2xl font-bold text-foreground font-mono">${expectedValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                      <p className={`text-2xl font-bold font-mono ${displayUnrealizedProfit >= 0 ? "text-accent" : "text-red-400"}`}>
+                        {displayUnrealizedProfit >= 0 ? "+" : ""}${displayUnrealizedProfit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </p>
                       <p
-                        className={`text-xs font-bold font-mono mt-1 ${expectedReturn >= 0 ? "text-accent" : "text-red-400"}`}
+                        className={`text-xs font-bold font-mono mt-1 ${displayUnrealizedProfitROI >= 0 ? "text-accent" : "text-red-400"}`}
                       >
-                        {expectedReturn >= 0 ? "+" : ""}
-                        {expectedReturn.toFixed(1)}% exp. return
+                        {displayUnrealizedProfitROI >= 0 ? "+" : ""}
+                        {displayUnrealizedProfitROI.toFixed(2)}% ROI
                       </p>
                     </div>
-                    <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center border border-accent/20 shadow-inner">
-                      <Target className="w-5 h-5 text-accent" />
+                    <div
+                      className={`w-10 h-10 rounded-lg flex items-center justify-center border shadow-inner ${
+                        displayUnrealizedProfit >= 0 ? "bg-accent/10 border-accent/20" : "bg-red-400/10 border-red-400/20"
+                      }`}
+                    >
+                      {displayUnrealizedProfit >= 0 ? (
+                        <TrendingUp className="w-5 h-5 text-accent" />
+                      ) : (
+                        <TrendingDown className="w-5 h-5 text-red-400" />
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -395,57 +522,82 @@ export default function PolymarketAnalyzer() {
               {/* Sector Exposure - 1 column */}
               <Card className="bg-card/50 border-accent/20 shadow-lg shadow-accent/5 backdrop-blur-sm">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-mono text-accent uppercase tracking-wider">
-                    &gt; Sector_Exposure
+                  <CardTitle className="text-sm font-mono text-accent uppercase tracking-wider flex items-center gap-2">
+                    &gt; Sectors
+                    {isLoadingSectors && (
+                      <div className="w-3 h-3 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+                    )}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="flex items-center justify-center">
-                    <ChartContainer
-                      config={{
-                        value: {
-                          label: "Exposure",
-                          color: "hsl(142, 76%, 36%)",
-                        },
-                      }}
-                      className="h-[220px] w-full max-w-[220px] min-w-0"
-                    >
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={sectorData}
-                            dataKey="value"
-                            nameKey="sector"
-                            cx="50%"
-                            cy="50%"
-                            outerRadius={80}
-                            innerRadius={40}
-                            paddingAngle={2}
-                            label={false}
-                          >
-                            {sectorData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <ChartTooltip content={<ChartTooltipContent />} />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </ChartContainer>
-                  </div>
-                  <div className="mt-4 space-y-2">
-                    {sectorData.map((sector, index) => (
-                      <div key={sector.sector} className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-2">
-                          <div
-                            className="w-3 h-3 rounded-full"
-                            style={{ backgroundColor: COLORS[index % COLORS.length] }}
-                          />
-                          <span className="text-muted-foreground font-mono">{sector.sector}</span>
-                        </div>
-                        <span className="text-foreground font-mono font-bold">${sector.value.toFixed(0)}</span>
+                  {isLoadingSectors ? (
+                    <div className="flex flex-col items-center justify-center h-[220px] space-y-4">
+                      <div className="w-12 h-12 border-4 border-accent/20 border-t-accent rounded-full animate-spin" />
+                      <p className="text-xs text-muted-foreground font-mono text-center">
+                        Loading sector labels...
+                        <br />
+                        <span className="text-[10px]">This may take a moment</span>
+                      </p>
+                    </div>
+                  ) : sectorData.length === 0 ? (
+                    <div className="flex items-center justify-center h-[220px]">
+                      <p className="text-sm text-muted-foreground font-mono">No sector data available</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-center">
+                        <ChartContainer
+                          config={
+                            sectorData.reduce((acc, sector, index) => {
+                              acc[sector.sector] = {
+                                label: sector.sector,
+                                color: COLORS[index % COLORS.length],
+                              }
+                              return acc
+                            }, {} as Record<string, { label: string; color: string }>)
+                          }
+                          className="h-[220px] w-full max-w-[220px] min-w-0"
+                        >
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={sectorData}
+                                dataKey="value"
+                                nameKey="sector"
+                                cx="50%"
+                                cy="50%"
+                                outerRadius={80}
+                                innerRadius={40}
+                                paddingAngle={2}
+                                label={false}
+                              >
+                                {sectorData.map((entry, index) => (
+                                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                ))}
+                              </Pie>
+                              <ChartTooltip content={<ChartTooltipContent nameKey="sector" />} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </ChartContainer>
                       </div>
-                    ))}
-                  </div>
+                      <div className="mt-4 positions-scroll overflow-y-auto max-h-[200px]">
+                        <div className="space-y-3 pr-2">
+                          {sectorData.map((sector, index) => (
+                            <div key={sector.sector} className="flex items-center gap-2">
+                              <div
+                                className="w-3 h-3 rounded flex-shrink-0"
+                                style={{ backgroundColor: COLORS[index % COLORS.length] }}
+                              />
+                              <span className="text-foreground font-mono font-bold text-lg">{sector.sector}</span>
+                              <span className="text-foreground font-mono text-sm ml-auto">
+                                {sector.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </CardContent>
               </Card>
 
@@ -720,79 +872,6 @@ export default function PolymarketAnalyzer() {
                     </div>
                   </div>
                 )}
-              </CardContent>
-            </Card>
-
-            {/* PNL Tracker at bottom */}
-            <Card className="bg-card/50 border-accent/20 shadow-lg shadow-accent/5 backdrop-blur-sm">
-              <CardHeader>
-                <CardTitle className="text-sm font-mono text-accent uppercase tracking-wider">
-                  &gt; PNL_Tracker
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ChartContainer
-                  config={{
-                    pnl: {
-                      label: "P&L",
-                      color: "hsl(142, 76%, 36%)",
-                    },
-                  }}
-                  className="h-[350px] w-full min-w-0"
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={pnlHistory} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                      <defs>
-                        <linearGradient id="pnlGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="hsl(142, 76%, 36%)" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="hsl(142, 76%, 36%)" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(142, 76%, 36%, 0.15)" vertical={false} />
-                      <XAxis
-                        dataKey="date"
-                        stroke="hsl(142, 76%, 36%)"
-                        style={{ fontSize: "12px", fontFamily: "var(--font-mono)", fontWeight: "bold" }}
-                        tickLine={{ stroke: "hsl(142, 76%, 36%, 0.3)" }}
-                        axisLine={{ stroke: "hsl(142, 76%, 36%, 0.3)" }}
-                      />
-                      <YAxis
-                        stroke="hsl(142, 76%, 36%)"
-                        style={{ fontSize: "12px", fontFamily: "var(--font-mono)", fontWeight: "bold" }}
-                        tickLine={{ stroke: "hsl(142, 76%, 36%, 0.3)" }}
-                        axisLine={{ stroke: "hsl(142, 76%, 36%, 0.3)" }}
-                        tickFormatter={(value) => `$${value}`}
-                      />
-                      <ChartTooltip
-                        content={<ChartTooltipContent />}
-                        cursor={{
-                          stroke: "hsl(142, 76%, 36%)",
-                          strokeWidth: 2,
-                          strokeDasharray: "5 5",
-                        }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="pnl"
-                        stroke="hsl(142, 76%, 36%)"
-                        strokeWidth={4}
-                        dot={{
-                          fill: "hsl(142, 76%, 36%)",
-                          strokeWidth: 3,
-                          r: 6,
-                          stroke: "hsl(var(--background))",
-                        }}
-                        activeDot={{
-                          r: 8,
-                          stroke: "hsl(142, 76%, 36%)",
-                          strokeWidth: 3,
-                          fill: "hsl(var(--background))",
-                        }}
-                        fill="url(#pnlGradient)"
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </ChartContainer>
               </CardContent>
             </Card>
           </div>

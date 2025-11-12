@@ -1,6 +1,6 @@
-# PolyExposure Frontend
+# PolyPortfolio Frontend
 
-Next.js frontend application for PolyExposure - a portfolio management dashboard for Polymarket wallets.
+Next.js frontend application for PolyPortfolio - a portfolio management dashboard for Polymarket wallets.
 
 ## Installation
 

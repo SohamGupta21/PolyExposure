@@ -105,13 +105,74 @@ export function transformPositions(
       const sharesValue = pos.size || pos.shares || pos.quantity || pos.amount || pos.tokens || pos.sharesNum || '0'
       const shares = typeof sharesValue === 'string' ? parseFloat(sharesValue) : (sharesValue || 0)
       
-      // Get prices - try multiple field names, handle both string and number
-      const avgPriceValue = pos.avgPrice || pos.averagePrice || pos.costBasis || pos.price || pos.avgPriceNum || '0'
-      const avgPrice = typeof avgPriceValue === 'string' ? parseFloat(avgPriceValue) : (avgPriceValue || 0)
+      // Get outcome/position - Polymarket API uses 'outcome' field
+      // Need to know this early to properly convert prices for NO positions
+      const outcome = pos.outcome || pos.side || pos.position || 'Yes'
+      const isNo = outcome.toLowerCase() === 'no'
       
-      // Polymarket API uses 'curPrice' for current price, 'currentValue' for total value
-      const currentPriceValue = pos.curPrice || pos.currentPrice || pos.price || pos.latestPrice || pos.marketPrice || pos.currentPriceNum || avgPrice || '0'
-      const currentPrice = typeof currentPriceValue === 'string' ? parseFloat(currentPriceValue) : (currentPriceValue || 0)
+      // Get average price - prefer token-specific fields first
+      // Token-specific fields (avgPrice, averagePrice, costBasis) are already correct for the outcome
+      // Market-level fallbacks (price, avgPriceNum) might be YES prices and need conversion for NO
+      let avgPrice = 0
+      let avgPriceSource: string | null = null
+      
+      if (pos.avgPrice !== undefined && pos.avgPrice !== null && pos.avgPrice !== '') {
+        avgPrice = typeof pos.avgPrice === 'string' ? parseFloat(pos.avgPrice) : (pos.avgPrice || 0)
+        avgPriceSource = 'avgPrice'
+      } else if (pos.averagePrice !== undefined && pos.averagePrice !== null && pos.averagePrice !== '') {
+        avgPrice = typeof pos.averagePrice === 'string' ? parseFloat(pos.averagePrice) : (pos.averagePrice || 0)
+        avgPriceSource = 'averagePrice'
+      } else if (pos.costBasis !== undefined && pos.costBasis !== null && pos.costBasis !== '') {
+        avgPrice = typeof pos.costBasis === 'string' ? parseFloat(pos.costBasis) : (pos.costBasis || 0)
+        avgPriceSource = 'costBasis'
+      } else if ((pos as any).price !== undefined && (pos as any).price !== null && (pos as any).price !== '') {
+        avgPrice = typeof (pos as any).price === 'string' ? parseFloat((pos as any).price) : ((pos as any).price || 0)
+        avgPriceSource = 'price' // Market-level, might be YES price
+      } else if ((pos as any).avgPriceNum !== undefined && (pos as any).avgPriceNum !== null && (pos as any).avgPriceNum !== '') {
+        avgPrice = typeof (pos as any).avgPriceNum === 'string' ? parseFloat((pos as any).avgPriceNum) : ((pos as any).avgPriceNum || 0)
+        avgPriceSource = 'avgPriceNum' // Market-level, might be YES price
+      }
+      
+      // Convert YES price to NO price if this is a NO position and we used a market-level fallback
+      if (isNo && avgPriceSource && ['price', 'avgPriceNum'].includes(avgPriceSource)) {
+        avgPrice = 1 - avgPrice
+      }
+      
+      // Get current price - prefer token-specific fields first
+      // Token-specific fields (curPrice, currentPrice) are already correct for the outcome
+      // Market-level fallbacks (price, latestPrice, marketPrice) might be YES prices and need conversion for NO
+      let currentPrice = 0
+      let currentPriceSource: string | null = null
+      
+      if ((pos as any).curPrice !== undefined && (pos as any).curPrice !== null && (pos as any).curPrice !== '') {
+        currentPrice = typeof (pos as any).curPrice === 'string' ? parseFloat((pos as any).curPrice) : ((pos as any).curPrice || 0)
+        currentPriceSource = 'curPrice'
+      } else if ((pos as any).currentPrice !== undefined && (pos as any).currentPrice !== null && (pos as any).currentPrice !== '') {
+        currentPrice = typeof (pos as any).currentPrice === 'string' ? parseFloat((pos as any).currentPrice) : ((pos as any).currentPrice || 0)
+        currentPriceSource = 'currentPrice'
+      } else if ((pos as any).currentPriceNum !== undefined && (pos as any).currentPriceNum !== null && (pos as any).currentPriceNum !== '') {
+        currentPrice = typeof (pos as any).currentPriceNum === 'string' ? parseFloat((pos as any).currentPriceNum) : ((pos as any).currentPriceNum || 0)
+        currentPriceSource = 'currentPriceNum'
+      } else if ((pos as any).price !== undefined && (pos as any).price !== null && (pos as any).price !== '') {
+        currentPrice = typeof (pos as any).price === 'string' ? parseFloat((pos as any).price) : ((pos as any).price || 0)
+        currentPriceSource = 'price' // Market-level, might be YES price
+      } else if ((pos as any).latestPrice !== undefined && (pos as any).latestPrice !== null && (pos as any).latestPrice !== '') {
+        currentPrice = typeof (pos as any).latestPrice === 'string' ? parseFloat((pos as any).latestPrice) : ((pos as any).latestPrice || 0)
+        currentPriceSource = 'latestPrice' // Market-level, might be YES price
+      } else if ((pos as any).marketPrice !== undefined && (pos as any).marketPrice !== null && (pos as any).marketPrice !== '') {
+        currentPrice = typeof (pos as any).marketPrice === 'string' ? parseFloat((pos as any).marketPrice) : ((pos as any).marketPrice || 0)
+        currentPriceSource = 'marketPrice' // Market-level, might be YES price
+      } else if (avgPrice > 0) {
+        currentPrice = avgPrice
+        currentPriceSource = 'avgPriceFallback'
+        // avgPrice is already converted for NO positions if needed (see lines 137-139)
+      }
+      
+      // Convert YES price to NO price if this is a NO position and we used a market-level fallback
+      // Note: avgPriceFallback doesn't need conversion because avgPrice was already converted if needed
+      if (isNo && currentPriceSource && ['price', 'latestPrice', 'marketPrice'].includes(currentPriceSource)) {
+        currentPrice = 1 - currentPrice
+      }
       
       // Use currentValue if available, otherwise calculate from shares * currentPrice
       const value = pos.currentValue !== undefined && pos.currentValue !== null 
@@ -119,12 +180,10 @@ export function transformPositions(
         : (shares * currentPrice)
       
       // Use cashPnl if available, otherwise calculate
+      // cashPnl from API should already be correct for the outcome
       const pnl = pos.cashPnl !== undefined && pos.cashPnl !== null
         ? (typeof pos.cashPnl === 'string' ? parseFloat(pos.cashPnl) : pos.cashPnl)
         : ((currentPrice - avgPrice) * shares)
-
-      // Get outcome/position - Polymarket API uses 'outcome' field
-      const outcome = pos.outcome || pos.side || pos.position || 'Yes'
       
       // Get end date - Polymarket API uses 'endDate' field directly on position
       const endDate = 
@@ -268,49 +327,168 @@ export function transformExpirationTimeline(positions: Position[]): ExpirationTi
     .sort((a, b) => a.daysFromNow - b.daysFromNow) // Sort by soonest first
 }
 
-// Calculate PnL history from activity (simplified - groups by month)
-export function calculatePnLHistory(activityData: PolymarketActivity[]): Array<{ date: string; pnl: number }> {
+// Calculate PnL history from activity using FIFO matching (groups by month)
+export function calculatePnLHistory(
+  activityData: PolymarketActivity[],
+  positionsData?: PolymarketPosition[]
+): Array<{ date: string; pnl: number; cumulativePnL: number }> {
   if (!Array.isArray(activityData)) {
     return []
   }
 
-  // Group activities by month and calculate cumulative PnL
-  const monthlyPnL = new Map<string, number>()
-  let cumulativePnL = 0
+  // Track open positions using FIFO (conditionId -> queue of {price, quantity, timestamp})
+  const openPositions = new Map<string, Array<{ price: number; quantity: number; timestamp: number }>>()
+  const monthlyPnL = new Map<string, number>() // "YYYY-MM" -> PNL
 
-  activityData
-    .sort((a, b) => {
-      const timeA = new Date(a.timestamp || a.createdAt || 0).getTime()
-      const timeB = new Date(b.timestamp || b.createdAt || 0).getTime()
-      return timeA - timeB
-    })
-    .forEach((activity) => {
-      const timestamp = activity.timestamp || activity.createdAt
-      if (!timestamp) return
+  // Helper functions to extract data from activity
+  const getConditionId = (activity: PolymarketActivity): string | null => {
+    return (activity as any).conditionId || (activity as any).condition_id || null
+  }
 
-      const date = new Date(timestamp)
-      const monthKey = date.toLocaleDateString('en-US', { month: 'short' })
+  const getSide = (activity: PolymarketActivity): 'BUY' | 'SELL' => {
+    const side = ((activity as any).side || activity.type || '').toUpperCase()
+    if (side === 'SELL' || side.includes('SELL') || side.includes('SALE')) {
+      return 'SELL'
+    }
+    return 'BUY'
+  }
 
-      // Simplified PnL calculation based on activity type
-      const price = parseFloat(activity.price || '0')
-      const amount = parseFloat(activity.amount || '0')
-      const type = activity.type?.toUpperCase() || ''
+  const getSize = (activity: PolymarketActivity): number => {
+    const size = (activity as any).size || activity.amount || '0'
+    return typeof size === 'string' ? parseFloat(size) : (size || 0)
+  }
 
-      // This is a simplified calculation - real PnL would need more context
-      if (type.includes('SELL') || type.includes('CLOSE')) {
-        cumulativePnL += price * amount * 0.1 // Assume 10% profit on sells (simplified)
-      } else {
-        cumulativePnL -= price * amount * 0.05 // Assume 5% cost on buys (simplified)
+  const getPrice = (activity: PolymarketActivity): number => {
+    const price = activity.price || (activity as any).fillPrice || (activity as any).tradePrice || '0'
+    return typeof price === 'string' ? parseFloat(price) : (price || 0)
+  }
+
+  const getTimestamp = (activity: PolymarketActivity): number => {
+    const timestamp = (activity as any).timestamp || (activity as any).createdAt || (activity as any).created || 0
+    if (typeof timestamp === 'string') {
+      if (/^\d+$/.test(timestamp)) {
+        return parseInt(timestamp)
       }
+      return new Date(timestamp).getTime() / 1000
+    }
+    if (typeof timestamp === 'number') {
+      // If timestamp is in milliseconds, convert to seconds
+      return timestamp > 1e10 ? Math.floor(timestamp / 1000) : timestamp
+    }
+    return 0
+  }
 
-      monthlyPnL.set(monthKey, cumulativePnL)
+  const getMonthKey = (timestamp: number): string => {
+    if (timestamp === 0) {
+      const now = new Date()
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    }
+    const date = new Date(timestamp * 1000)
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+  }
+
+  // Filter and sort activity chronologically (oldest first)
+  // Only include activities with valid conditionId, size, and price
+  const validActivities = activityData.filter((activity) => {
+    const conditionId = getConditionId(activity)
+    const size = getSize(activity)
+    const price = getPrice(activity)
+    return conditionId && size > 0 && price >= 0
+  })
+
+  const sortedActivity = validActivities.sort((a, b) => {
+    const timeA = getTimestamp(a)
+    const timeB = getTimestamp(b)
+    return timeA - timeB
+  })
+
+  // Process activity to calculate realized PNL
+  for (const activity of sortedActivity) {
+    const conditionId = getConditionId(activity)
+    const side = getSide(activity)
+    const size = getSize(activity)
+    const price = getPrice(activity)
+    const timestamp = getTimestamp(activity)
+
+    const monthKey = getMonthKey(timestamp)
+
+    if (side === 'BUY') {
+      // Add to open positions (FIFO queue)
+      if (!openPositions.has(conditionId)) {
+        openPositions.set(conditionId, [])
+      }
+      openPositions.get(conditionId)!.push({
+        price,
+        quantity: size,
+        timestamp
+      })
+    } else if (side === 'SELL') {
+      // Match against open positions using FIFO
+      let remainingSell = size
+      const positions = openPositions.get(conditionId) || []
+
+      while (remainingSell > 0 && positions.length > 0) {
+        const oldestPosition = positions[0]
+        const buyPrice = oldestPosition.price
+        const buyQuantity = oldestPosition.quantity
+
+        if (buyQuantity <= remainingSell) {
+          // Close entire position
+          const realizedPnL = (price - buyPrice) * buyQuantity
+          monthlyPnL.set(monthKey, (monthlyPnL.get(monthKey) || 0) + realizedPnL)
+          remainingSell -= buyQuantity
+          positions.shift()
+        } else {
+          // Partial close
+          const realizedPnL = (price - buyPrice) * remainingSell
+          monthlyPnL.set(monthKey, (monthlyPnL.get(monthKey) || 0) + realizedPnL)
+          oldestPosition.quantity -= remainingSell
+          remainingSell = 0
+        }
+      }
+    }
+  }
+
+  // Calculate unrealized PNL from current positions
+  let unrealizedPnL = 0
+  if (positionsData && Array.isArray(positionsData)) {
+    for (const position of positionsData) {
+      const conditionId = getConditionId(position as any)
+      const size = (position as any).size || parseFloat(position.shares || '0')
+      const avgPrice = parseFloat((position as any).avgPrice || (position as any).averagePrice || '0')
+      const currentPrice = parseFloat((position as any).curPrice || (position as any).currentPrice || position.currentPrice || '0')
+
+      if (conditionId && size > 0 && avgPrice >= 0 && currentPrice >= 0) {
+        unrealizedPnL += (currentPrice - avgPrice) * size
+      }
+    }
+  }
+
+  // Add unrealized PNL to most recent month
+  if (sortedActivity.length > 0) {
+    const mostRecentTimestamp = getTimestamp(sortedActivity[sortedActivity.length - 1])
+    const mostRecentMonth = getMonthKey(mostRecentTimestamp)
+    monthlyPnL.set(mostRecentMonth, (monthlyPnL.get(mostRecentMonth) || 0) + unrealizedPnL)
+  } else if (unrealizedPnL !== 0) {
+    const currentMonth = getMonthKey(0)
+    monthlyPnL.set(currentMonth, (monthlyPnL.get(currentMonth) || 0) + unrealizedPnL)
+  }
+
+  // Build monthly data with cumulative PNL
+  const allMonths = Array.from(monthlyPnL.keys()).sort()
+  let cumulativePnL = 0
+  const result: Array<{ date: string; pnl: number; cumulativePnL: number }> = []
+
+  for (const month of allMonths) {
+    const monthlyPnLValue = monthlyPnL.get(month) || 0
+    cumulativePnL += monthlyPnLValue
+    result.push({
+      date: month,
+      pnl: Math.round(monthlyPnLValue * 100) / 100,
+      cumulativePnL: Math.round(cumulativePnL * 100) / 100
     })
+  }
 
-  // Convert to array format
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-  return months.map((month) => ({
-    date: month,
-    pnl: Math.round((monthlyPnL.get(month) || 0) * 100) / 100,
-  }))
+  return result
 }
 
